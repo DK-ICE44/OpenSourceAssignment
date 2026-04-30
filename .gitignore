@@ -6,3 +6,4 @@ db/
 app/rag/chroma_db/
 *.db
 .DS_Store
+data
