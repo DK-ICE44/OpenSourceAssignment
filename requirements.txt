@@ -1,7 +1,7 @@
-fastapi==0.115.5
+fastapi>=0.116.0
 uvicorn[standard]==0.32.1
 sqlalchemy==2.0.36
-pydantic==2.10.3
+pydantic>=2.10.3
 pydantic-settings==2.6.1
 python-jose[cryptography]==3.3.0
 passlib[bcrypt]==1.7.4
@@ -10,9 +10,14 @@ pdfplumber==0.11.4
 chromadb==0.5.23
 langchain==0.3.12
 langchain-community==0.3.12
-google-genai==1.10.0
+langchain-google-genai==2.1.4
 langchain-groq==0.2.3
+langgraph==0.2.60
+langsmith==0.2.3
+google-genai==1.10.0
+groq==0.13.1
 sentence-transformers==3.3.1
 httpx==0.28.1
 python-dotenv==1.0.1
 aiofiles==24.1.0
+fastmcp==2.2.8

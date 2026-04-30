@@ -45,8 +45,15 @@ def hr_chat(
                 "sources": result["sources"]}
 
     elif intent == "leave_balance":
-        balance = get_leave_balance(current_user.id, date.today().year, db)
-        return {"intent": intent, "response": balance}
+        try:
+            balance = get_leave_balance(current_user.id, date.today().year, db)
+            return {"intent": intent, "response": balance}
+        except HTTPException:
+            return {
+                "intent": intent,
+                "response": "No leave balance record found for the current year. "
+                            "Please contact HR to set up your leave balance."
+            }
 
     elif intent == "leave_apply":
         return {
@@ -137,7 +144,7 @@ def my_leave_requests(
 
 @router.get("/leave/pending-approvals")
 def pending_approvals(
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_manager_or_above),
     db: Session = Depends(get_db)
 ):
     """Managers: view all pending leave requests from their team."""
