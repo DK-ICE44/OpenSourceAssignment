@@ -77,6 +77,10 @@ def classify_intent(user_message: str) -> dict:
         result = json.loads(raw)
         logger.info(f"Intent classified: {result}")
         return result
+    except ValueError as e:
+        # API key validation error
+        logger.error(f"Configuration error in intent classification: {e}")
+        raise
     except Exception as e:
         logger.warning(f"LLM intent classification failed ({e}), using keyword fallback")
         return _keyword_fallback(user_message)

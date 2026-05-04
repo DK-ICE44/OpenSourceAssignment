@@ -33,9 +33,26 @@ app.include_router(chat_router)   # ← NEW: LangGraph-powered chat
 @app.on_event("startup")
 def startup():
     init_db()
+    
+    # Validate configuration
+    if not settings.gemini_api_key:
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.warning(
+            "GEMINI_API_KEY not configured. Chat features will be limited. "
+            "Add GEMINI_API_KEY to .env file. Get it from: https://ai.google.dev"
+        )
+    if not settings.groq_api_key:
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.warning(
+            "GROQ_API_KEY not configured. Intent classification will use keyword fallback. "
+            "Add GROQ_API_KEY to .env file. Get it from: https://console.groq.com"
+        )
+    
     # Configure LangSmith tracing if key is present
     tracing = configure_langsmith()
-    print(f"✅ {settings.app_name} v2.0 started!")
+    print(f"{settings.app_name} v2.0 started!")
     print(f"   LangSmith tracing: {'enabled' if tracing else 'disabled'}")
 
 @app.get("/health")

@@ -45,7 +45,18 @@ class AgentState(TypedDict):
 def router_node(state: AgentState) -> dict:
     """Classify intent from the latest user message."""
     last_message = state["messages"][-1].content
-    result = classify_intent(last_message)
+    history = state.get("messages", [])
+    previous_turns = []
+    for msg in history[:-1]:
+        role = "user" if isinstance(msg, HumanMessage) else "assistant"
+        previous_turns.append(f"{role}: {msg.content}")
+    context = "\n".join(previous_turns[-6:])  # keep prompt short and recent
+
+    message_for_classification = (
+        f"Previous conversation:\n{context}\n\nCurrent user message:\n{last_message}"
+        if context else last_message
+    )
+    result = classify_intent(message_for_classification)
     logger.info(
         f"[Router] user={state.get('employee_id')} | "
         f"intent={result.get('intent')} | confidence={result.get('confidence')}"
@@ -60,6 +71,32 @@ def router_node(state: AgentState) -> dict:
 def hr_rag_node(state: AgentState) -> dict:
     """Answer HR policy questions using the LangChain RAG chain."""
     question = state["messages"][-1].content
+    messages = state.get("messages", [])
+
+    # Resolve vague follow-ups like "elaborate more on that" using prior turn context.
+    follow_up_markers = [
+        "elaborate", "more", "that", "this", "explain", "details",
+        "expand", "tell me more", "clarify"
+    ]
+    is_follow_up = any(marker in question.lower() for marker in follow_up_markers)
+    if is_follow_up and len(messages) > 1:
+        last_user_topic = ""
+        last_assistant_answer = ""
+        for msg in reversed(messages[:-1]):
+            if not last_assistant_answer and isinstance(msg, AIMessage):
+                last_assistant_answer = msg.content
+            if isinstance(msg, HumanMessage):
+                last_user_topic = msg.content
+                break
+
+        if last_user_topic:
+            question = (
+                "Use the previous topic to answer this follow-up.\n"
+                f"Previous user topic: {last_user_topic}\n"
+                f"Previous assistant answer: {last_assistant_answer}\n"
+                f"Follow-up question: {state['messages'][-1].content}"
+            )
+
     result = answer_policy_question(question, state.get("role", "employee"))
     ai_msg = AIMessage(content=result["answer"])
     return {
@@ -190,10 +227,14 @@ _compiled_graph = None
 
 def _build_graph():
     import os
+    import sqlite3
     os.makedirs("db", exist_ok=True)
 
-    
-    memory = SqliteSaver.from_conn_string("db/graph_memory.db")
+    # Create or connect to the database
+    # LangGraph checkpoint writes can execute on worker threads,
+    # so SQLite must allow cross-thread access for this shared connection.
+    db_conn = sqlite3.connect("db/graph_memory.db", check_same_thread=False)
+    memory = SqliteSaver(db_conn)
 
     g = StateGraph(AgentState)
 
@@ -236,28 +277,37 @@ def invoke_graph(message: str, user_id: int, employee_id: str,
     Invoke the graph for a user message.
     thread_id = employee_id → each employee gets their own conversation memory.
     """
-    graph = get_graph()
+    try:
+        logger.info(f"invoke_graph: Starting for {employee_id}")
+        graph = get_graph()
+        logger.info(f"invoke_graph: Graph compiled successfully")
 
-    config = {"configurable": {"thread_id": employee_id}}
+        config = {"configurable": {"thread_id": employee_id}}
+        logger.info(f"invoke_graph: Config created with thread_id={employee_id}")
 
-    result = graph.invoke(
-        {
-            "messages":    [HumanMessage(content=message)],
-            "user_id":     user_id,
-            "employee_id": employee_id,
-            "role":        role,
-            "department":  department,
-            "intent":      "",
-            "response":    "",
-            "sources":     [],
-            "confidence":  0.0
-        },
-        config=config
-    )
+        logger.info(f"invoke_graph: About to call graph.invoke with message: {message[:50]}...")
+        result = graph.invoke(
+            {
+                "messages":    [HumanMessage(content=message)],
+                "user_id":     user_id,
+                "employee_id": employee_id,
+                "role":        role,
+                "department":  department,
+                "intent":      "",
+                "response":    "",
+                "sources":     [],
+                "confidence":  0.0
+            },
+            config=config
+        )
+        logger.info(f"invoke_graph: Completed successfully")
 
-    return {
-        "response":   result.get("response", ""),
-        "intent":     result.get("intent", "general"),
-        "sources":    result.get("sources", []),
-        "confidence": result.get("confidence", 0.0)
-    }
+        return {
+            "response":   result.get("response", ""),
+            "intent":     result.get("intent", "general"),
+            "sources":    result.get("sources", []),
+            "confidence": result.get("confidence", 0.0)
+        }
+    except Exception as e:
+        logger.error(f"invoke_graph error: {type(e).__name__}: {str(e)}", exc_info=True)
+        raise

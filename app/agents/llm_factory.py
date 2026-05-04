@@ -15,6 +15,11 @@ settings = get_settings()
 
 def get_primary_llm(temperature: float = 0.2, max_tokens: int = 1024):
     """Gemini 2.5 Flash — best quality, used for RAG and complex reasoning."""
+    if not settings.gemini_api_key:
+        raise ValueError(
+            "GEMINI_API_KEY not configured. Please add it to .env file. "
+            "Get your key from: https://ai.google.dev"
+        )
     return ChatGoogleGenerativeAI(
         model="gemini-2.5-flash",
         google_api_key=settings.gemini_api_key,
@@ -25,6 +30,11 @@ def get_primary_llm(temperature: float = 0.2, max_tokens: int = 1024):
 
 def get_fast_llm(temperature: float = 0.1, max_tokens: int = 128):
     """Groq llama-3.1-8b-instant — fastest, used only for intent classification."""
+    if not settings.groq_api_key:
+        raise ValueError(
+            "GROQ_API_KEY not configured. Please add it to .env file. "
+            "Get your key from: https://console.groq.com"
+        )
     return ChatGroq(
         model="llama-3.1-8b-instant",
         groq_api_key=settings.groq_api_key,
@@ -35,6 +45,11 @@ def get_fast_llm(temperature: float = 0.1, max_tokens: int = 128):
 
 def get_fallback_llm(temperature: float = 0.2, max_tokens: int = 1024):
     """Groq llama-3.3-70b — fallback when Gemini is unavailable or fails."""
+    if not settings.groq_api_key:
+        raise ValueError(
+            "GROQ_API_KEY not configured. Please add it to .env file. "
+            "Get your key from: https://console.groq.com"
+        )
     return ChatGroq(
         model="llama-3.3-70b-versatile",
         groq_api_key=settings.groq_api_key,
