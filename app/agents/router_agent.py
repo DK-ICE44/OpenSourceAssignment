@@ -1,57 +1,82 @@
 """
-Intent classifier: routes a user message to the correct agent.
-Uses a lightweight LLM call (Groq llama-3.1-8b-instant for speed).
+Intent classifier rebuilt with LangChain.
+Uses Groq llama-3.1-8b-instant (fastest free model) for low-latency classification.
+Falls back to keyword matching if LLM call fails.
 """
 import json
-from app.config import get_settings
+import logging
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.output_parsers import StrOutputParser
+from app.agents.llm_factory import get_fast_llm
 
-settings = get_settings()
+logger = logging.getLogger(__name__)
 
-INTENT_PROMPT = """You are an intent classifier for an enterprise HR & IT assistant.
+# ── Prompt ────────────────────────────────────────────────────────────────────
+INTENT_PROMPT = ChatPromptTemplate.from_messages([
+    ("system", """You are an intent classifier for an enterprise HR & IT assistant.
 Classify the user query into exactly ONE of these intents:
-- hr_policy: questions about company policies, rules, benefits, handbook
-- leave_apply: applying for leave
-- leave_balance: checking leave balance or history  
-- leave_approve: approving or rejecting leave (manager only)
-- leave_status: checking status of a leave request
-- leave_cancel: cancelling a leave request
-- it_ticket: raising or checking IT support tickets
-- it_asset: requesting IT assets (laptop, monitor, etc.)
-- it_ticket_update: updating ticket status (IT team only)
-- general: greetings, thanks, unclear intent
+- hr_policy       : company policies, rules, benefits, handbook questions
+- leave_apply     : applying for leave
+- leave_balance   : checking leave balance or history
+- leave_approve   : approving or rejecting leave (manager action)
+- leave_status    : checking status of a leave request
+- leave_cancel    : cancelling a leave request
+- it_ticket       : raising or tracking IT support tickets
+- it_asset        : requesting IT assets (laptop, monitor, etc.)
+- it_ticket_update: updating ticket status (IT team action)
+- general         : greetings, thanks, or unclear intent
 
-Respond with ONLY a JSON object like: {"intent": "hr_policy", "confidence": 0.95}
-"""
+Rules:
+- Respond with ONLY a raw JSON object. No markdown. No extra text.
+- Example: {{"intent": "hr_policy", "confidence": 0.95}}"""),
+    ("human", "{message}")
+])
 
+# ── Chain singleton ───────────────────────────────────────────────────────────
+_classifier_chain = None
+
+def _get_classifier_chain():
+    global _classifier_chain
+    if _classifier_chain is None:
+        llm = get_fast_llm(temperature=0.1, max_tokens=60)
+        _classifier_chain = INTENT_PROMPT | llm | StrOutputParser()
+        logger.info("Intent classifier chain initialized (Groq llama-3.1-8b-instant)")
+    return _classifier_chain
+
+# ── Keyword fallback ──────────────────────────────────────────────────────────
+def _keyword_fallback(message: str) -> dict:
+    msg = message.lower()
+    if any(w in msg for w in ["policy", "rule", "handbook", "notice period",
+                               "wfh", "work from home", "maternity", "paternity"]):
+        return {"intent": "hr_policy", "confidence": 0.7}
+    if any(w in msg for w in ["apply leave", "take leave", "want leave", "need leave"]):
+        return {"intent": "leave_apply", "confidence": 0.7}
+    if any(w in msg for w in ["balance", "how many leaves", "remaining leave", "leave left"]):
+        return {"intent": "leave_balance", "confidence": 0.7}
+    if any(w in msg for w in ["leave status", "my leave request", "pending leave"]):
+        return {"intent": "leave_status", "confidence": 0.7}
+    if any(w in msg for w in ["approve leave", "reject leave", "pending approval"]):
+        return {"intent": "leave_approve", "confidence": 0.7}
+    if any(w in msg for w in ["ticket", "vpn", "laptop issue", "printer",
+                               "network", "software install", "outlook"]):
+        return {"intent": "it_ticket", "confidence": 0.7}
+    if any(w in msg for w in ["asset", "request laptop", "request monitor",
+                               "need equipment", "new laptop"]):
+        return {"intent": "it_asset", "confidence": 0.7}
+    return {"intent": "general", "confidence": 0.5}
+
+# ── Public API ────────────────────────────────────────────────────────────────
 def classify_intent(user_message: str) -> dict:
-    """Returns intent classification."""
+    """
+    Classify intent using LangChain LCEL chain (Groq).
+    Falls back to keyword matching on any failure.
+    """
     try:
-        from groq import Groq
-        client = Groq(api_key=settings.groq_api_key)
-        response = client.chat.completions.create(
-            model="llama-3.1-8b-instant",  # Fast, free, great for classification
-            messages=[
-                {"role": "system", "content": INTENT_PROMPT},
-                {"role": "user", "content": user_message}
-            ],
-            max_tokens=60,
-            temperature=0.1
-        )
-        raw = response.choices[0].message.content.strip()
-        return json.loads(raw)
-    except Exception:
-        # Fallback: keyword-based classification
-        msg = user_message.lower()
-        if any(w in msg for w in ["policy", "rule", "handbook", "leave policy",
-                                    "notice period", "wfh", "work from home"]):
-            return {"intent": "hr_policy", "confidence": 0.7}
-        elif any(w in msg for w in ["apply leave", "take leave", "want leave"]):
-            return {"intent": "leave_apply", "confidence": 0.7}
-        elif any(w in msg for w in ["balance", "how many leaves", "remaining"]):
-            return {"intent": "leave_balance", "confidence": 0.7}
-        elif any(w in msg for w in ["ticket", "vpn", "laptop issue", "printer",
-                                     "network", "software"]):
-            return {"intent": "it_ticket", "confidence": 0.7}
-        elif any(w in msg for w in ["asset", "request laptop", "request monitor"]):
-            return {"intent": "it_asset", "confidence": 0.7}
-        return {"intent": "general", "confidence": 0.5}
+        chain = _get_classifier_chain()
+        raw = chain.invoke({"message": user_message}).strip()
+        result = json.loads(raw)
+        logger.info(f"Intent classified: {result}")
+        return result
+    except Exception as e:
+        logger.warning(f"LLM intent classification failed ({e}), using keyword fallback")
+        return _keyword_fallback(user_message)
