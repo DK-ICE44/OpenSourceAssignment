@@ -19,10 +19,7 @@ from fastmcp import FastMCP
 from starlette.responses import JSONResponse
 
 from app.database import SessionLocal
-from app.tools.leave_tools import (
-    apply_leave, get_leave_balance, approve_leave
-)
-from app.tools.ticket_tools import create_ticket
+
 
 logger = logging.getLogger(__name__)
 

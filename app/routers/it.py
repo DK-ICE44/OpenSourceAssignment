@@ -168,3 +168,131 @@ async def request_asset(
         "status": "pending_manager",
         "message": "Asset request submitted. Awaiting manager approval."
     }
+
+@router.get("/assets/my")
+def my_asset_requests(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """View all asset requests submitted by the current user."""
+    requests = db.query(AssetRequest).filter(
+        AssetRequest.requester_id == current_user.id
+    ).order_by(AssetRequest.created_at.desc()).all()
+
+    return [
+        {
+            "request_id": r.request_id,
+            "asset_type": r.asset_type,
+            "justification": r.justification,
+            "status": r.status.value,
+            "created_at": str(r.created_at)
+        }
+        for r in requests
+    ]
+
+
+@router.post("/assets/approve")
+async def approve_asset(
+    request_id: str,
+    action: str,          # "approve" or "reject"
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Two-stage asset approval:
+    - Manager approves first  → status moves to pending_it
+    - IT team approves second → status moves to approved
+    """
+    asset = db.query(AssetRequest).filter(
+        AssetRequest.request_id == request_id
+    ).first()
+
+    if not asset:
+        raise HTTPException(404, "Asset request not found")
+
+    if action == "reject":
+        if current_user.role not in [RoleEnum.manager, RoleEnum.hr_team,
+                                      RoleEnum.it_team, RoleEnum.admin]:
+            raise HTTPException(403, "Not authorized to reject asset requests")
+        asset.status = AssetStatusEnum.rejected
+        db.commit()
+
+        # Notify requester
+        requester = db.query(User).get(asset.requester_id)
+        if requester:
+            await send_email(
+                to=requester.email,
+                subject=f"Asset Request {request_id} Rejected",
+                body=f"Hi {requester.full_name},\n\n"
+                     f"Your asset request for {asset.asset_type} ({request_id}) "
+                     f"has been rejected by {current_user.full_name}.\n\n"
+                     f"IT Support Team",
+                email_type="asset_rejected"
+            )
+        return {"request_id": request_id, "status": "rejected"}
+
+    if action == "approve":
+        # Stage 1: Manager approval
+        if (asset.status == AssetStatusEnum.pending_manager and
+                current_user.role in [RoleEnum.manager, RoleEnum.hr_team,
+                                       RoleEnum.admin]):
+            asset.status = AssetStatusEnum.pending_it
+            asset.manager_approved_by = current_user.id
+            db.commit()
+
+            # Notify IT team — find any IT team member
+            it_member = db.query(User).filter(
+                User.role == RoleEnum.it_team
+            ).first()
+            if it_member:
+                await send_email(
+                    to=it_member.email,
+                    subject=f"[IT Action Required] Asset Request {request_id}",
+                    body=f"Hi {it_member.full_name},\n\n"
+                         f"Asset request {request_id} has been approved by manager "
+                         f"{current_user.full_name} and now requires IT approval.\n\n"
+                         f"Asset: {asset.asset_type}\n"
+                         f"Requester: {db.query(User).get(asset.requester_id).full_name}\n\n"
+                         f"Please review via POST /it/assets/approve",
+                    email_type="asset_it_approval"
+                )
+            return {
+                "request_id": request_id,
+                "status": "pending_it",
+                "message": "Manager approved. Forwarded to IT team for final approval."
+            }
+
+        # Stage 2: IT team approval
+        elif (asset.status == AssetStatusEnum.pending_it and
+              current_user.role in [RoleEnum.it_team, RoleEnum.admin]):
+            asset.status = AssetStatusEnum.approved
+            asset.it_approved_by = current_user.id
+            db.commit()
+
+            # Notify requester
+            requester = db.query(User).get(asset.requester_id)
+            if requester:
+                await send_email(
+                    to=requester.email,
+                    subject=f"Asset Request {request_id} Approved",
+                    body=f"Hi {requester.full_name},\n\n"
+                         f"Your request for {asset.asset_type} has been fully approved!\n"
+                         f"Request ID: {request_id}\n\n"
+                         f"The IT team will arrange delivery shortly.\n\n"
+                         f"IT Support Team",
+                    email_type="asset_approved"
+                )
+            return {
+                "request_id": request_id,
+                "status": "approved",
+                "message": "Asset request fully approved. IT team will arrange fulfillment."
+            }
+
+        else:
+            raise HTTPException(
+                400,
+                f"Cannot approve: current status is '{asset.status.value}', "
+                f"your role is '{current_user.role.value}'"
+            )
+
+    raise HTTPException(400, "action must be 'approve' or 'reject'")

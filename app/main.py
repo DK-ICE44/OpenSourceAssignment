@@ -5,6 +5,7 @@ from app.database import init_db
 from app.routers import auth, hr, it
 from app.routers.chat import router as chat_router
 from app.middleware.logging_mw import log_request
+from app.routers.admin import router as admin_router
 
 settings = get_settings()
 
@@ -29,6 +30,7 @@ app.include_router(auth.router)
 app.include_router(hr.router)
 app.include_router(it.router)
 app.include_router(chat_router)   # ← NEW: LangGraph-powered chat
+app.include_router(admin_router)
 
 @app.on_event("startup")
 def startup():

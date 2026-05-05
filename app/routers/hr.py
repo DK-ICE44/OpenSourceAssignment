@@ -209,3 +209,36 @@ async def approve_leave_endpoint(
             )
 
     return result
+
+@router.post("/leave/cancel")
+def cancel_leave(
+    request_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Cancel a pending leave request. Only the owner can cancel their own request."""
+    from app.models import LeaveStatusEnum
+
+    leave = db.query(LeaveRequest).filter(
+        LeaveRequest.request_id == request_id,
+        LeaveRequest.employee_id == current_user.id  # RBAC: own requests only
+    ).first()
+
+    if not leave:
+        raise HTTPException(404, "Leave request not found or does not belong to you")
+
+    if leave.status != LeaveStatusEnum.pending:
+        raise HTTPException(
+            400,
+            f"Cannot cancel leave with status '{leave.status.value}'. "
+            f"Only pending requests can be cancelled."
+        )
+
+    leave.status = LeaveStatusEnum.cancelled
+    db.commit()
+
+    return {
+        "request_id": request_id,
+        "status": "cancelled",
+        "message": "Leave request cancelled successfully."
+    }
