@@ -71,8 +71,8 @@ The app will start at `http://localhost:8000`
 
 ```bash
 curl -X POST "http://localhost:8000/auth/login" \
-  -H "Content-Type: application/x-www-form-urlencoded" \
-  -d "username=alice@company.com&password=password123"
+  -H "Content-Type: application/json" \
+  -d '{"employee_id":"EMP001","password":"password123"}'
 ```
 
 Response:
@@ -97,6 +97,21 @@ curl -X POST "http://localhost:8000/chat" \
 1. Go to http://localhost:8000/docs (Swagger UI)
 2. Click "Authorize" and paste your token
 3. Find the POST /chat endpoint and try it
+
+### 4. Or Use the Included Frontend UI
+
+From the project root, run:
+
+```bash
+python -m http.server 5500 --directory frontend
+```
+
+Then open: `http://localhost:5500`
+
+In the UI:
+1. Keep API Base URL as `http://localhost:8000`
+2. Login with employee ID + password (for example: `EMP001` / `password123`)
+3. Start chatting directly with the agent
 
 ## Sample Users
 
@@ -138,9 +153,8 @@ curl -X POST "http://localhost:8000/chat" \
 ## API Endpoints
 
 ### Authentication
-- `POST /auth/register` - Register a new user
 - `POST /auth/login` - Login and get access token
-- `POST /auth/refresh` - Refresh the access token
+- `GET /auth/me` - Get current user details
 
 ### Chat
 - `POST /chat` - Send a message (requires auth token)

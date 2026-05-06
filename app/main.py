@@ -6,6 +6,8 @@ from app.routers import auth, hr, it
 from app.routers.chat import router as chat_router
 from app.middleware.logging_mw import log_request
 from app.routers.admin import router as admin_router
+from fastapi.staticfiles import StaticFiles
+import os
 
 settings = get_settings()
 
@@ -31,6 +33,9 @@ app.include_router(hr.router)
 app.include_router(it.router)
 app.include_router(chat_router)   # ← NEW: LangGraph-powered chat
 app.include_router(admin_router)
+
+os.makedirs("frontend", exist_ok=True)
+app.mount("/app", StaticFiles(directory="frontend", html=True), name="frontend")
 
 @app.on_event("startup")
 def startup():
