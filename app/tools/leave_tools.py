@@ -3,7 +3,7 @@ from datetime import date, datetime, timedelta
 from sqlalchemy.orm import Session
 from fastapi import HTTPException
 from app.models import (LeaveRequest, LeaveBalance, HolidayCalendar,
-                         LeaveStatusEnum, LeaveTypeEnum, User)
+                         LeaveStatusEnum, LeaveTypeEnum, User, RoleEnum)
 
 def generate_leave_id() -> str:
     return f"LV{uuid.uuid4().hex[:8].upper()}"
@@ -144,3 +144,108 @@ def approve_leave(request_id: str, approver_id: int,
     leave.manager_notes = notes
     db.commit()
     return {"request_id": request_id, "status": leave.status.value}
+
+
+def get_my_leave_requests(employee_id: int, db: Session) -> list:
+    """Fetch all leave requests for an employee with count summary."""
+    leaves = db.query(LeaveRequest).filter(
+        LeaveRequest.employee_id == employee_id
+    ).order_by(LeaveRequest.created_at.desc()).all()
+
+    leave_list = []
+    for leave in leaves:
+        leave_list.append({
+            "request_id": leave.request_id,
+            "leave_type": leave.leave_type.value,
+            "start_date": leave.start_date,
+            "end_date": leave.end_date,
+            "num_days": leave.num_days,
+            "status": leave.status.value,
+            "reason": leave.reason or "N/A",
+            "created_at": str(leave.created_at) if leave.created_at else "N/A"
+        })
+
+    total_count = len(leave_list)
+    pending_count = sum(1 for l in leave_list if l["status"] == "pending")
+    approved_count = sum(1 for l in leave_list if l["status"] == "approved")
+    cancelled_count = sum(1 for l in leave_list if l["status"] == "cancelled")
+
+    return {
+        "total": total_count,
+        "pending": pending_count,
+        "approved": approved_count,
+        "cancelled": cancelled_count,
+        "leaves": leave_list
+    }
+
+
+def get_company_leave_stats(db: Session) -> dict:
+    """Get company-wide leave statistics for HR/Admin."""
+    all_leaves = db.query(LeaveRequest).all()
+
+    stats = {
+        "total": len(all_leaves),
+        "pending": sum(1 for l in all_leaves if l.status == LeaveStatusEnum.pending),
+        "approved": sum(1 for l in all_leaves if l.status == LeaveStatusEnum.approved),
+        "cancelled": sum(1 for l in all_leaves if l.status == LeaveStatusEnum.cancelled),
+        "rejected": sum(1 for l in all_leaves if l.status == LeaveStatusEnum.rejected),
+    }
+
+    # Group by leave type
+    leave_types = {}
+    for l in all_leaves:
+        lt = l.leave_type.value
+        if lt not in leave_types:
+            leave_types[lt] = {"total": 0, "pending": 0, "approved": 0}
+        leave_types[lt]["total"] += 1
+        if l.status == LeaveStatusEnum.pending:
+            leave_types[lt]["pending"] += 1
+        elif l.status == LeaveStatusEnum.approved:
+            leave_types[lt]["approved"] += 1
+
+    return {"summary": stats, "by_type": leave_types}
+
+
+def get_pending_approvals(approver_id: int, approver_role: str, db: Session) -> dict:
+    """Get all pending approvals for a manager or HR team member."""
+    pending_leaves = db.query(LeaveRequest).filter(
+        LeaveRequest.status == LeaveStatusEnum.pending
+    ).all()
+
+    approvals = []
+    for leave in pending_leaves:
+        employee = db.query(User).get(leave.employee_id)
+        if not employee:
+            continue
+
+        # Manager can see their direct reports' requests
+        # HR/Admin can see all
+        if approver_role in ["hr_team", "admin"]:
+            approvals.append({
+                "type": "leave",
+                "request_id": leave.request_id,
+                "requester": employee.full_name,
+                "requester_dept": employee.department or "N/A",
+                "leave_type": leave.leave_type.value,
+                "start_date": leave.start_date,
+                "end_date": leave.end_date,
+                "num_days": leave.num_days,
+                "reason": leave.reason or "N/A"
+            })
+        elif approver_role == "manager" and employee.manager_id == approver_id:
+            approvals.append({
+                "type": "leave",
+                "request_id": leave.request_id,
+                "requester": employee.full_name,
+                "requester_dept": employee.department or "N/A",
+                "leave_type": leave.leave_type.value,
+                "start_date": leave.start_date,
+                "end_date": leave.end_date,
+                "num_days": leave.num_days,
+                "reason": leave.reason or "N/A"
+            })
+
+    return {
+        "total": len(approvals),
+        "approvals": approvals
+    }

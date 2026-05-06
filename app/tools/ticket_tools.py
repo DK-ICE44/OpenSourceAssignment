@@ -1,7 +1,7 @@
 import uuid
 from sqlalchemy.orm import Session
 from fastapi import HTTPException
-from app.models import ITTicket, KnownOutage, TicketStatusEnum, TicketPriorityEnum, User
+from app.models import ITTicket, KnownOutage, TicketStatusEnum, TicketPriorityEnum, User, AssetRequest, AssetStatusEnum
 
 ISSUE_PRIORITY_MAP = {
     "vpn": "high", "network": "high", "email": "high", "outlook": "high",
@@ -86,3 +86,87 @@ def create_ticket(requester_id: int, issue_type: str, description: str,
         "status": "open",
         "message": f"Ticket {ticket.ticket_id} created successfully."
     }
+
+
+def get_all_open_tickets(db: Session) -> dict:
+    """Fetch all open/in_progress tickets for IT team."""
+    tickets = db.query(ITTicket).filter(
+        ITTicket.status.in_([TicketStatusEnum.open, TicketStatusEnum.in_progress])
+    ).order_by(ITTicket.priority.desc(), ITTicket.created_at.desc()).all()
+
+    ticket_list = []
+    for ticket in tickets:
+        requester = db.query(User).filter(User.id == ticket.requester_id).first()
+        requester_name = requester.full_name if requester else "Unknown"
+        ticket_list.append({
+            "ticket_id": ticket.ticket_id,
+            "issue_type": ticket.issue_type,
+            "description": ticket.description[:100] + "..." if len(ticket.description) > 100 else ticket.description,
+            "priority": ticket.priority.value,
+            "status": ticket.status.value,
+            "requester": requester_name,
+            "created_at": str(ticket.created_at) if ticket.created_at else "N/A"
+        })
+
+    return {
+        "total": len(ticket_list),
+        "open": sum(1 for t in ticket_list if t["status"] == "open"),
+        "in_progress": sum(1 for t in ticket_list if t["status"] == "in_progress"),
+        "tickets": ticket_list
+    }
+
+
+def get_my_tickets(requester_id: int, db: Session) -> dict:
+    """Fetch all tickets for a specific user."""
+    tickets = db.query(ITTicket).filter(
+        ITTicket.requester_id == requester_id
+    ).order_by(ITTicket.created_at.desc()).all()
+
+    ticket_list = []
+    for ticket in tickets:
+        ticket_list.append({
+            "ticket_id": ticket.ticket_id,
+            "issue_type": ticket.issue_type,
+            "description": ticket.description[:100] + "..." if len(ticket.description) > 100 else ticket.description,
+            "priority": ticket.priority.value,
+            "status": ticket.status.value,
+            "created_at": str(ticket.created_at) if ticket.created_at else "N/A"
+        })
+
+    return {
+        "total": len(ticket_list),
+        "open": sum(1 for t in ticket_list if t["status"] == "open"),
+        "in_progress": sum(1 for t in ticket_list if t["status"] == "in_progress"),
+        "resolved": sum(1 for t in ticket_list if t["status"] == "resolved"),
+        "tickets": ticket_list
+    }
+
+
+def get_inventory_status(db: Session) -> dict:
+    """Get asset inventory summary for IT team."""
+    all_requests = db.query(AssetRequest).all()
+
+    summary = {
+        "pending_manager": 0,
+        "pending_it": 0,
+        "approved": 0,
+        "rejected": 0,
+        "fulfilled": 0,
+        "total": len(all_requests)
+    }
+
+    for r in all_requests:
+        summary[r.status.value] += 1
+
+    pending = [
+        {
+            "request_id": r.request_id,
+            "requester": db.query(User).get(r.requester_id).full_name if db.query(User).get(r.requester_id) else "Unknown",
+            "asset_type": r.asset_type,
+            "status": r.status.value
+        }
+        for r in all_requests
+        if r.status.value in ["pending_manager", "pending_it"]
+    ]
+
+    return {"summary": summary, "pending_requests": pending}

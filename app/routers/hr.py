@@ -147,16 +147,22 @@ def pending_approvals(
     current_user: User = Depends(require_manager_or_above),
     db: Session = Depends(get_db)
 ):
-    """Managers: view all pending leave requests from their team."""
+    """Managers: view team pending. HR/Admin: view all pending."""
     from app.models import LeaveStatusEnum
-    # Get direct reports
-    reports = db.query(User).filter(User.manager_id == current_user.id).all()
-    report_ids = [r.id for r in reports]
-
-    pending = db.query(LeaveRequest).filter(
-        LeaveRequest.employee_id.in_(report_ids),
-        LeaveRequest.status == LeaveStatusEnum.pending
-    ).all()
+    
+    # HR and Admin see ALL pending leaves
+    if current_user.role in [RoleEnum.hr_team, RoleEnum.admin]:
+        pending = db.query(LeaveRequest).filter(
+            LeaveRequest.status == LeaveStatusEnum.pending
+        ).all()
+    else:
+        # Managers see only their direct reports' pending leaves
+        reports = db.query(User).filter(User.manager_id == current_user.id).all()
+        report_ids = [r.id for r in reports]
+        pending = db.query(LeaveRequest).filter(
+            LeaveRequest.employee_id.in_(report_ids),
+            LeaveRequest.status == LeaveStatusEnum.pending
+        ).all()
 
     return [
         {
